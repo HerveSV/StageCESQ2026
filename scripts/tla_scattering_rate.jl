@@ -3,7 +3,10 @@ using AtomTwin
 using AtomTwin.Units
 using Plots
 using StatsBase
-using DataFrames, CSV 
+using Dates
+
+# speed of light in vacuum, Boltzmann constant
+#import PhysicalConstants.CODATA2022
 
 # Fitting
 using Optimization
@@ -12,11 +15,20 @@ using OptimizationOptimJL
 # Convenience
 using PyFormattedStrings
 
-# ## Parameters
 
-# Physical constants
-const k_B = 1.380649e-23
-const c = 29979245
+LOG_MESSAGES = true
+HAVE_TWEEZER = true
+
+# of Monte-Carlo shots for each detuning
+N_shots = 500# 500#2000
+
+s0_list = [0.1]#, 0.1, 10, 100]
+
+
+# ## Parameters
+const c_0 = 2.99792458e8
+const k_B = 1.38064852e-23
+
 
 # Falconi et al. PHYSICAL REVIEW LETTERS 135, 203402 (2025)
 const T_init = 20μK     # Initial atom temperature
@@ -27,7 +39,7 @@ const waist_tweezer = 580nm
 # The Falconi paper provides the following value
 const λ_magic_bluemot = 530nm
 # Temperature equivalent of trap depth
-const T_depth = 2.27mK           
+const T_depth = 2.27mK           # 0
 
 
 # Yb171 Blue MOT transition 1S0 -> 1P1
@@ -37,31 +49,60 @@ const ω_bluemot = 2π * 751.5274711THz
 # Yb171 Yellow Clock transition 1S0 -> 3P0
 const Γ_clock = 2π * 7.6e-3 
 const ω_clock = 2π * 518.29583659086363THz
+const λ_magic_clock = float(c_0) / 394.79947535THz
+
 
 
 # Shorthand for the 
-const Γ = Γ_bluemot
-const ω0 = ω_bluemot
-const λ_tweezer = λ_magic_bluemot
+Γ = Γ_clock
+ω0 = ω_clock
+λ_tweezer = λ_magic_clock + 100nm
 
 
-const pulse_duration = 0.1μs #1000 / (Ω/2π)
-const dt = 1e-10#pulse_duration / 100_000
+
+
 
 # relation between Rabi frequency and saturation parameter for two-level atom
 function tla_rabifreq(s0, Γ)
     return Γ * sqrt(s0/2)
 end
 
+function compute_FWHM(X, Y; max_idx=nothing)
+    if isnothing(max_idx)
+        y_max, max_idx = findmax(Y)
+    else
+        y_max = Y[max_idx]
+    end
+    y_half = y_max / 2.0
+
+    # Interpolation function to find exact x where y = y_half between two indices
+    interp_x(idx1, idx2) = X[idx1] + (y_half - Y[idx1]) * (X[idx2] - X[idx1]) / (Y[idx2] - Y[idx1])
+
+    # Left side crossing (search backward from peak)
+    left_idx2 = findlast(i -> Y[i] <= y_half, 1:max_idx)
+    left_idx1 = left_idx2 + 1
+    x_left = interp_x(left_idx1, left_idx2)
+
+    # Right side crossing (search forward from peak)
+    right_idx1 = max_idx + findfirst(i -> Y[i] <= y_half, (max_idx + 1):length(Y)) - 1
+    right_idx2 = right_idx1 + 1
+    x_right = interp_x(right_idx1, right_idx2)
+
+    # FWHM calculation
+    fwhm = x_right - x_left
+
+    return fwhm
+
+end
+
 
 # ## System Definition
 #
 #
-
 # Blue mot transition
-g, e = Level("1S0"), Level("1P1")
+#g, e = Level("1S0"), Level("1P1")
 # Yellow clock transition
-#g, e = Level("1S0"), Level("3P0")
+g, e = Level("1S0"), Level("3P0")
 
 atom = Ytterbium171Atom(;
     levels = [g, e],
@@ -69,21 +110,23 @@ atom = Ytterbium171Atom(;
     v_init = maxwellboltzmann(T=T_init)
 )
 
-display(atom)
+if LOG_MESSAGES
+    display(atom)
+end
 
 
-#print(Γ/2π * 1e-6)
 # ## Define a set of laser detunings
+#
+#
 # Sharply peaked resonance, makes sense to sample more near resonance
 sampling_method = "tan"
-Δ_max = 2π * 200MHz
-Δ_min = 2π * 0.01MHz    # used for logarithmic sampling
-γ = Γ_bluemot * 2 # width of dense sample area - for 
-N_half = 100 # expect 2N_half + 1 points
+Δ_max = 7Γ                      #2π * 100e-3 # 100 kHz
+Δ_min = 3e-4 * Γ                 #2π * 0.01e-3 #0.01MHz    # used for logarithmic sampling
+γ = Γ * 2                        # width of dense sample area - for tangent sampling
+N_half = 10                     # expect 2N_half + 1 points
 
 
-s0_list = [0.1, 10, 100]
-#λ_list = [λ_tweezer-200nm, λ_tweezer, λ_tweezer+200nm] # around magic wavelength
+
 
 if sampling_method == "log"
     # Generate points from Δ_min to Δ_max in log space
@@ -97,21 +140,22 @@ elseif sampling_method == "tan"
 elseif sampling_method == "linear"
     Δ_step = Δ_max/N_half
     detunings = range(-Δ_max, Δ_max, step=Δ_step)
+elseif sampling_method == "test"
+    detunings = 2π * 1e-3 .* range(82.5, 83.3, length=2N_half+1)#range(75.7, 100.0, length=100)
 else
-    println("Default to linear sampling for detuning")
     Δ_step = Δ_max/N_points 
     detunings = range(-Δ_max, Δ_max, step=Δ_step)
 end
 
-if false
-    Plots.scatter(detunings, detunings)
+if LOG_MESSAGES
+    println(f"Detuning samples = {length(detunings)}, method = {sampling_method}")
+    plt1 =Plots.scatter(detunings, detunings; title=f"samples = {length(detunings)}, method = {sampling_method}")
+    display(plt1)
 end
 
-scattering_rates = zeros(size(detunings))
 
-# linear fit to extract scattering rate
+## Linear fit to extract scattering rate
 linfunc(x; slope) = slope*x
-
 # We must supply an objective function that will be minimized
 # The u argument is a vector of parameters from the optimizer.
 # data is a vector of static parameters passed through below.
@@ -132,8 +176,6 @@ function objective(u, data)
     return sum(residuals.^2)
 end
 
-size(detunings)[1]
-
 beam = PlanarBeam(399e-9, 1.0, [0.0, 1.0, 0.0], [1, 0, 0])
 
 
@@ -142,29 +184,37 @@ beam = PlanarBeam(399e-9, 1.0, [0.0, 1.0, 0.0], [1, 0, 0])
 Ω_param = Parameter(:Omega, 1MHz)
 
 
-# Find power needed to achieve wanted trap
-U_depth = k_B * T_depth     # J
-# light shift per unit intensity for blue MOT transition
-U_I = AtomTwin._calc_light_shift(ω0, Γ, 2π*c/λ_tweezer)
 
-# For fundamental Gaussian beam, peak intensity I0 at waist is 
-# related to total power P via I0 = 2P/(π w²)
-# Trap depth U_depth = -U_I * I0, rearrange for P
-P_tweezer = - 0.5 * π * waist_tweezer^2 * U_depth/U_I
 
-# Single-site tweezer, tunable wavelength
-tweezer = GaussianBeam(
-    λ   = λ_tweezer,
-    w0  = waist_tweezer,
-    P   = P_tweezer 
-)
-# Build full system with coherent coupling between levels
-system = System(atom, tweezer)
+if HAVE_TWEEZER    
+    # Find power needed to achieve wanted trap
+    U_depth = k_B * T_depth     # J
+    # light shift per unit intensity for blue MOT transition
+    U_I = AtomTwin._calc_light_shift(ω0, Γ, 2π*c_0/λ_tweezer)
 
+    # For fundamental Gaussian beam, peak intensity I0 at waist is 
+    # related to total power P via I0 = 2P/(π w²)
+    # Trap depth U_depth = -U_I * I0, rearrange for P
+    P_tweezer = - 0.5 * π * waist_tweezer^2 * U_depth/U_I
+
+    # Single-site tweezer, tunable wavelength
+    tweezer = GaussianBeam(
+        λ   = λ_tweezer,
+        w0  = waist_tweezer,
+        P   = P_tweezer 
+    )
+    # Build full system with coherent coupling between levels
+    system = System(atom, tweezer)      
+else
+    # Build full system without tweezer, just the two-level atom
+    system = System(atom)
+end
 
 
 # ## Drive two-level atom
-coupling = add_coupling!(system, atom, g => e, Ω_param; active = false, beam = beam)
+#
+#
+coupling = add_coupling!(system, atom, g => e, Ω_param; active = false)
 detuning = add_detuning!(system, atom, e, Δ_param; active = false)
 
 # ## Build Sequence
@@ -177,23 +227,49 @@ add_detector!(system, PhotoDetectorSpec(name="click"))
 add_decay!(system, atom, e => g, Γ; clicks=pd)
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
 
-seq = Sequence(dt)
-@sequence seq begin
-    Pulse([coupling, detuning], pulse_duration)
-end
-
-
 
 # ## Run and analyse
 # run a seperate simulation for each detuning
 
-println(f"Tweezer wavelength: {λ_tweezer*1e9} nm")
+#pulse_duration =  3000 / (tla_rabifreq(1, Γ)/2π)
+#dt = pulse_duration / 10_000
+
+rates_list = []
+
+if LOG_MESSAGES
+    if HAVE_TWEEZER
+        println(f"Tweezer wavelength: {λ_tweezer*1e9} nm")
+    else
+        println(f"No tweezer")
+    end
+end
+
+# Create new directory to save data
+compact_date = Dates.format(now(), "yyyymmdd_HHMMSS")
+mkdir("./data/tla_scattering_rate/$compact_date")
 for (j, s0) in enumerate(s0_list)
-    println(f"Saturation parameter s0: {s0}")
-    println(f"./data/tla_scattering_rate/s0={s0}_tweezer={λ_tweezer*1e9}nm.csv")
     Ω = tla_rabifreq(s0, Γ)
+    scattering_rates = zeros(size(detunings))
+
+    # adaptive time-steps
+    pulse_duration =  100 / (Ω/2π)
+    dt = 1e-2 / (Δ_max / 2π)#pulse_duration / 100_000
+
+    if LOG_MESSAGES
+        println(f"Saturation parameter s0: {s0}")
+        println(f"dt = {dt:.2f}, pulse_duraction {pulse_duration:.2f}")
+    end
+
+    seq = Sequence(dt)
+    @sequence seq begin
+        Pulse([coupling, detuning], pulse_duration)
+    end
+    
+    filepath = f"./data/tla_scattering_rate/{compact_date}/clock_s0={s0}_tweezer={λ_tweezer*1e9:.1f}nm_050826.csv"
+    println(filepath)
+    
     for (i, Δ_det) in enumerate(detunings)
-        out = play(system, seq; initial_state=g, shots = 5000, density_matrix = false, delta = Δ_det, Omega = Ω)
+        out = play(system, seq; initial_state=g, shots = N_shots, density_matrix = false, delta = Δ_det, Omega = Ω)
 
         tlist = out.times
         counts = out.detectors["click"]
@@ -214,38 +290,99 @@ for (j, s0) in enumerate(s0_list)
         rate = sol.u[1]
 
         scattering_rates[i] = rate
-        if i%10 == 0
-            println(f"Δ = {detunings[i]/2π * 1e-6:.1f} MHz, R/Γ = {rate/Γ_bluemot:.2f}")
+
+        if LOG_MESSAGES
+            plt0 = Plots.plot(
+                tlist,
+                mean_cumm_counts,
+                xlabel    = "Time (s) [Trap on]",
+                ylabel    = "Cummulative photon counts",
+                color = :blue,
+                linewidth = 1,
+                alpha = 1,
+                title = f"detuning = {detunings[i]/2π * 1e3} mHz, R/Γ = {rate/Γ}",
+
+            )
+
+            display(plt0)
+            # need to use (i-1)%10 as julia is 1-indexed
+            if (i-1)%10 == 0
+                println(f"Δ = {detunings[i]/2π * 1e3:.1f} mHz, R/Γ = {rate/Γ_clock:.2f}")
+            end
         end
     end
 
-    # ## Plotting
+    #fwhm = compute_FWHM(detunings, scattering_rates)
 
-    Plots.plot(
-        detunings/2π  * 1e-6,
-        scattering_rates/Γ,
-        xlabel = "Detuning (MHz)",
+    plt_temp = Plots.plot(
+        detunings./2π  .* 1e3,
+        scattering_rates./Γ,
+        xlabel = "Detuning (mHz)",
         ylabel = "R / Γ",
-        label = "Simulated values",
-        ylim = [0, 0.5]
+        label = f"s0 = {s0}",
+        titlefont=font(12,"Arial"),
+        title = f"s0={s0:.2f}"
     )
 
+    display(plt_temp)
+
+    #push!(fwhm_list, fwhm)
+    push!(rates_list, scattering_rates)
 
     # ## Save data
 
-    #CSV.write(f"../data/tla_scattering_rate/s={s}.csv", (X = X, Y = Y))
-
-    open(f"./data/tla_scattering_rate/s0={s0}_tweezer={λ_tweezer*1e9}nm.csv", "w") do io
-        println(io, "Detuning [MHz],Scattering_Rate/Gamma")  # Your custom headers here
-        for (det, rate) in zip(detunings/2π  * 1e-6, scattering_rates/Γ_bluemot)
+    open(filepath, "w") do io
+        println(io, "# Parameters: s0 = $s0, tweezer = $(λ_tweezer*1e9) nm, Rabi_freq = $Ω Hz, Gamma = $Γ Hz, N_shots = $N_shots, pulse_duration = $pulse_duration s, dt = $dt s")
+       
+        println(io, "Detuning [mHz],Scattering_Rate/Gamma")  # Your custom headers here
+        for (det, rate) in zip(detunings./2π  .* 1e3, scattering_rates./Γ)
             println(io, "$det,$rate")
         end
     end
 end
 
-Plots.hline([0.5];
+# Compute FWHM values
+fwhm_list = []
+for (j, s0) in enumerate(s0_list)
+    fwhm = compute_FWHM(detunings, rates_list[j])
+
+    push!(fwhm_list, fwhm)
+
+end
+
+
+# Prepare labels for plotting
+label_list = []
+for (j, s0) in enumerate(s0_list)
+    label = f"{s0}, {fwhm_list[j]/2π * 1e3:.1f} mHz, {Γ * sqrt(1+s0)/2π * 1e3:.1f} mHz"
+    push!(label_list, label)
+end
+
+print(size(rates_list))
+alphas = [0, 0.5, 1]
+colors = [:blue, :green, :red]
+plt = Plots.plot(
+    detunings./2π  .* 1e3,
+    rates_list./Γ,
+    xlabel = "Detuning (mHz)",
+    ylabel = "R / Γ",
+    label = hcat(label_list...),
+    ylim = [0, 0.5],
+    #alpha = alphas,
+    #color = colors
+    titlefont=font(12,"Arial"),
+    title = f"tweezer = {λ_tweezer*1e9:.1f}nm, Γ = {Γ/2π * 1e3:.1f} mHz, N_shots = {N_shots}, [s0, FWHM, Γ√(1+s0)]"
+)
+
+Plots.hline!(plt, [0.5];
         alpha = 0.3,
         color = :red,
         linestyle = :dash,
         label = "",
     )
+
+display(plt)
+
+#savefig("./figs/notweezer_s0_scan_040826_2.png")
+savefig(f"./data/tla_scattering_rate/{compact_date}/scatterrate_plot.pdf")
+# we seem to get a linewidth which roughly follows Γ√(1+s0), which is the expected relation

@@ -60,7 +60,8 @@ labels_short = []
 
 for (i, s0) in enumerate(s0_values)
     # 1. Read the CSV file into a DataFrame
-    df = CSV.read(f"./data/tla_scattering_rate/s0={s0}"*"_tweezer=530.0nm.csv", DataFrame)
+    filepath = f"./data/tla_scattering_rate/s0={s0}_notweezer.csv"#f"./data/tla_scattering_rate/s0={s0}_tweezer=530.0nm.csv"
+    df = CSV.read(filepath, DataFrame)
 
     # 2. Extract columns back into individual 1D arrays
     X = Vector(df[!,"Detuning [MHz]"])         # or df.X depending on your CSV headers
@@ -72,15 +73,7 @@ for (i, s0) in enumerate(s0_values)
     push!(rate_arrays, Y)
     push!(FWHM_values, FWHM)
 
-    #=
-    if i == 1
-        label = f"s0 = {s0}, FWHM = {FWHM:.2f} MHz, Γ = {Γ_bluemot/2π*1e-6:.2f} MHz"
-    elseif i == size(s0_values)[1]
-        label = f"s0 = {s0}, FWHM = {FWHM:.2f} MHz, √2Ω = {tla_rabifreq(s0, Γ_bluemot)/2π * 1e-6:.2f} MHz"
-    else
-        label = f"s0 = {s0}, FWHM = {FWHM:.2f} MHz"
-    end
-    =#
+
     label = f"s0 = {s0}, FWHM = {FWHM:.2f} MHz, √2Ω = {tla_rabifreq(s0, Γ_bluemot)/2π * 1e-6:.2f} MHz"
     push!(labels, label)
 
@@ -94,10 +87,12 @@ plt = Plots.plot(
     label = hcat(labels_short...),
     xlabel = "Detuning [MHz]",
     ylabel = "Scatter Rate / Γ",
-    title = "Tweezer wavelength: 730nm"
+    #title = "Tweezer wavelength: 730nm"
 )
 #Plots.scatter!(plt, [-FWHM/2, FWHM/2], [findmax(Y)[1]/2, findmax(Y)[1]/2])
 display(plt)
+
+#print(labels)
 
 println(f"Γ = {Γ_bluemot/2π * 1e-6} MHz")
 for l in labels

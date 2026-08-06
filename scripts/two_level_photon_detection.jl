@@ -14,15 +14,15 @@ using Optimization
 using OptimizationOptimJL
 
 # Convenicence
-using FStrings
+using PyFormattedStrings
 
 AtomTwin.hello_test()
 
 # ## Parameters
 
 # Physical constants
-const k_B = 1.380649e-23
-const c = 29979245
+const c = 2.99792458e8
+const k_B = 1.38064852e-23
 
 # PHYSICAL REVIEW LETTERS 135, 203402 (2025)
 const s0 = 40 # 1000           # s0 = I/I_Sat, for illumination beam
@@ -79,7 +79,7 @@ tweezer = GaussianBeam(
 # Resonant beam driving |g⟩ ↔ |e⟩ transition
 # Propagates towards +y
 # Horizontal polarisation along x
-gaussian_illumination = true
+gaussian_illumination = false
 
 if !gaussian_illumination
     # Plane wave if we want to address atom anywhere
@@ -107,6 +107,7 @@ coupling = add_coupling!(system, atom, g => e, Ω; active = false, beam = beam)
 #
 # We want to measure emitted photons
 # Also measure excited state population as sanity check
+# Measure atom positions to 
 
 pd = PhotoDetectorSpec(name="click")
 add_detector!(system, PhotoDetectorSpec(name="click"))
