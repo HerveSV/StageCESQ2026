@@ -376,7 +376,7 @@ plt = Plots.plot(
     #alpha = alphas,
     #color = colors
     titlefont=font(12,"Arial"),
-    title = f"tweezer = {λ_tweezer*1e9:.1f}nm, Γ = {Γ/2π * 1e-6:.1f} MHz, N_shots = {N_shots}, [s0, FWHM, Γ√(1+s0)]"
+    title = f"tweezer = {λ_tweezer*1e9:.1f}nm, Γ = {Γ/2π * 1e-6:.1f} MHz]"
 )
 
 Plots.hline!(plt, [0.5];
