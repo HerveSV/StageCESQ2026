@@ -16,7 +16,7 @@ using OptimizationOptimJL
 # Convenicence
 using PyFormattedStrings
 
-AtomTwin.hello_test()
+
 
 # ## Parameters
 
@@ -29,8 +29,8 @@ const s0 = 40 # 1000           # s0 = I/I_Sat, for illumination beam
 const T_init = 20μK     # Initial atom temperature
 
 const waist_tweezer = 580nm
-const λ_tweezer = 530nm
-const T_depth = 2.27mK           # Temperature equivalent of trap depth
+const λ_tweezer = 730nm
+const T_depth = 5mK#2.27mK           # Temperature equivalent of trap depth
 
 
 # Yb171 Blue MOT transition 1S0 -> 1P1
@@ -43,7 +43,7 @@ println(f"Rabi freq: {Ω/2π * 1e-6} MHz")
 println(f"√2 Ω = {sqrt(2) * Ω/2π * 1e-6} MHz")
 # ## System Definition
 
-g, e = Level("1S0"), Level("1P1")
+g, e = Level("1S0"), Level("3P0")
 
 atom = Ytterbium171Atom(;
     levels = [g, e],
@@ -102,6 +102,10 @@ system = System(atom, tweezer)
 
 # Contructor for two level atom
 coupling = add_coupling!(system, atom, g => e, Ω; active = false, beam = beam)
+detuning = add_detuning!(system, atom, e, 0MHz; active = false)
+
+initialize!(atom; beams=[tweezer])
+lightshifts = add_lightshifts!(system, atom)
 
 # ## Build Sequence
 #
@@ -116,8 +120,10 @@ add_decay!(system, atom, e => g, Γ_bluemot; clicks=pd)
 
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
 
+add_detector!(system, MotionDetectorSpec(atom; dims = [1, 2], name = "motion"))
 
-pulse_duration = 0.2μs #1000 / (Ω/2π)
+
+pulse_duration = 10μs #1000 / (Ω/2π)
 dt = 1e-10  #pulse_duration / 100_000
 
 seq = Sequence(dt)
@@ -236,7 +242,49 @@ Plots.plot!(
     color     = :red,
     linewidth = 1,
     alpha = 0.8,
-    label = "Theory"
+    label = "Theory",
+    title = "730nm Lightshift on"
 )
 
-plt2
+display(plt2)
+
+#savefig("figs/759_nolightshift.pdf")
+
+atom_motion = out.detectors["motion"]
+
+# atom_motion has dims (time, channels, shots) e.g. 1000 x 2 x 100
+# stack all shots sequentially to get (time*shots) x channels -> 100000 x 2
+atom_motion = out.detectors["motion"]
+nt = size(atom_motion, 1)
+nshots = size(atom_motion, 3)
+nch = size(atom_motion, 2)
+atom_motion_stacked = reshape(permutedims(atom_motion, (1, 3, 2)), nt * nshots, nch)
+
+plt3 = plot(
+    collect(1:size(atom_motion_stacked, 1)),
+    atom_motion_stacked[:, 1],
+    xlabel = "Sample index",
+    ylabel = "Motion channel 1",
+    label = "All shots stacked"
+)
+
+# XY position heatmap from the motion detector
+xpos = atom_motion_stacked[:, 1]
+ypos = atom_motion_stacked[:, 2]
+
+plt_xy = histogram2d(
+    xpos,
+    ypos,
+    nbins = (80, 80),
+    xlabel = "x position",
+    ylabel = "y position",
+    title = "Atom position XY heatmap",
+    colorbar = true,
+    aspect_ratio = 1,
+    legend = false,
+    c = :viridis,
+)
+
+display(plt_xy)
+
+

@@ -5,7 +5,6 @@ using AtomTwin
 using AtomTwin.Units
 using Plots
 
-AtomTwin.hello_test()
 
 # ## Parameters
 
@@ -94,7 +93,7 @@ beam = PlanarBeam(399e-9, 1.0, [1.0, 0.0, 0.0], [0, 1, 0])
 system   = System(yb, tweezer)
 
 #coupling = add_coupling!(system, atom, g => e, Ω; beam = beam, active = false)
-coupling = add_coupling!(system, yb, ground => excited_bluemot, beam; d_red=0.0, active = false)
+coupling = add_coupling!(system, yb, ground => excited_bluemot; active = false)
 
 # ## Build Sequence
 #

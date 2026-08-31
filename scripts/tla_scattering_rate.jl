@@ -17,12 +17,13 @@ using PyFormattedStrings
 
 
 LOG_MESSAGES = true
+
 HAVE_TWEEZER = true
 
 # of Monte-Carlo shots for each detuning
 N_shots = 500# 500#2000
 
-s0_list = [0.1]#, 0.1, 10, 100]
+s0_list = [10, 100]#[0.1, 10, 100]
 
 
 # ## Parameters
@@ -39,7 +40,7 @@ const waist_tweezer = 580nm
 # The Falconi paper provides the following value
 const λ_magic_bluemot = 530nm
 # Temperature equivalent of trap depth
-const T_depth = 2.27mK           # 0
+const T_depth = 10mK#2.27mK           # 0
 
 
 # Yb171 Blue MOT transition 1S0 -> 1P1
@@ -54,9 +55,9 @@ const λ_magic_clock = float(c_0) / 394.79947535THz
 
 
 # Shorthand for the 
-Γ = Γ_clock
+Γ = Γ_clock # Γ_bluemot
 ω0 = ω_clock
-λ_tweezer = λ_magic_clock + 100nm
+λ_tweezer = 700nm#λ_magic_clock
 
 
 
@@ -119,11 +120,11 @@ end
 #
 #
 # Sharply peaked resonance, makes sense to sample more near resonance
-sampling_method = "tan"
+sampling_method = "linear"
 Δ_max = 7Γ                      #2π * 100e-3 # 100 kHz
 Δ_min = 3e-4 * Γ                 #2π * 0.01e-3 #0.01MHz    # used for logarithmic sampling
 γ = Γ * 2                        # width of dense sample area - for tangent sampling
-N_half = 10                     # expect 2N_half + 1 points
+N_half = 200                     # expect 2N_half + 1 points
 
 
 
@@ -185,7 +186,6 @@ beam = PlanarBeam(399e-9, 1.0, [0.0, 1.0, 0.0], [1, 0, 0])
 
 
 
-
 if HAVE_TWEEZER    
     # Find power needed to achieve wanted trap
     U_depth = k_B * T_depth     # J
@@ -207,15 +207,17 @@ if HAVE_TWEEZER
     system = System(atom, tweezer)      
 else
     # Build full system without tweezer, just the two-level atom
-    system = System(atom)
+    #system = System(atom)
 end
 
 
 # ## Drive two-level atom
 #
 #
+initialize!(atom; beams=[tweezer])
 coupling = add_coupling!(system, atom, g => e, Ω_param; active = false)
 detuning = add_detuning!(system, atom, e, Δ_param; active = false)
+lightshifts = add_lightshifts!(system, active = true)
 
 # ## Build Sequence
 #
@@ -226,6 +228,7 @@ add_detector!(system, PhotoDetectorSpec(name="click"))
 # need to register decay channel after detector is created
 add_decay!(system, atom, e => g, Γ; clicks=pd)
 add_detector!(system, PopulationDetectorSpec(atom, e; name = "P_e"))
+
 
 
 # ## Run and analyse
@@ -292,6 +295,7 @@ for (j, s0) in enumerate(s0_list)
         scattering_rates[i] = rate
 
         if LOG_MESSAGES
+            """
             plt0 = Plots.plot(
                 tlist,
                 mean_cumm_counts,
@@ -305,9 +309,10 @@ for (j, s0) in enumerate(s0_list)
             )
 
             display(plt0)
+            """
             # need to use (i-1)%10 as julia is 1-indexed
-            if (i-1)%10 == 0
-                println(f"Δ = {detunings[i]/2π * 1e3:.1f} mHz, R/Γ = {rate/Γ_clock:.2f}")
+            if (i-1)%1 == 0
+                println(f"Δ = {detunings[i]/2π * 1e3:.1f} mHz, R/Γ = {rate/Γ_clock:.2f}, lightshift = {system.nodes[3]._field._coeff}")
             end
         end
     end
@@ -354,7 +359,7 @@ end
 # Prepare labels for plotting
 label_list = []
 for (j, s0) in enumerate(s0_list)
-    label = f"{s0}, {fwhm_list[j]/2π * 1e3:.1f} mHz, {Γ * sqrt(1+s0)/2π * 1e3:.1f} mHz"
+    label = f"{s0}, {fwhm_list[j]/2π * 1e-6:.1f} MHz, {Γ * sqrt(1+s0)/2π * 1e-6:.1f} MHz"
     push!(label_list, label)
 end
 
@@ -362,16 +367,16 @@ print(size(rates_list))
 alphas = [0, 0.5, 1]
 colors = [:blue, :green, :red]
 plt = Plots.plot(
-    detunings./2π  .* 1e3,
+    detunings./2π  .* 1e-6,
     rates_list./Γ,
-    xlabel = "Detuning (mHz)",
+    xlabel = "Detuning (MHz)",
     ylabel = "R / Γ",
     label = hcat(label_list...),
     ylim = [0, 0.5],
     #alpha = alphas,
     #color = colors
     titlefont=font(12,"Arial"),
-    title = f"tweezer = {λ_tweezer*1e9:.1f}nm, Γ = {Γ/2π * 1e3:.1f} mHz, N_shots = {N_shots}, [s0, FWHM, Γ√(1+s0)]"
+    title = f"tweezer = {λ_tweezer*1e9:.1f}nm, Γ = {Γ/2π * 1e-6:.1f} MHz, N_shots = {N_shots}, [s0, FWHM, Γ√(1+s0)]"
 )
 
 Plots.hline!(plt, [0.5];
